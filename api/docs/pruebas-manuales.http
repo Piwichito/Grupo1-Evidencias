@@ -1,0 +1,90 @@
+### Pruebas manuales de la API con la extensión "REST Client" de VS Code (humao.rest-client).
+### Haz clic en "Send Request" sobre cada petición. Cambia @host si usas la API desplegada.
+
+@host = http://localhost:3000
+
+### 1. Estado del servidor
+GET {{host}}/api/health
+
+### 2. Carta completa
+GET {{host}}/api/productos
+
+### 3. Carta filtrada por categoría
+GET {{host}}/api/productos?categoria=fondos
+
+### 4. Registrar un pedido (reemplaza los productoId por ids reales de la petición 2)
+POST {{host}}/api/pedidos
+Content-Type: application/json
+X-Rol: mozo
+
+{
+  "mesa": 5,
+  "cliente": "Familia Rojas",
+  "observaciones": "Sin ají",
+  "items": [
+    { "productoId": "REEMPLAZAR_ID_PRODUCTO", "cantidad": 2 }
+  ]
+}
+
+### 5. Listar pedidos
+GET {{host}}/api/pedidos
+
+### 6. Listar pedidos por estado
+GET {{host}}/api/pedidos?estado=recibido
+
+### 7. Ver un pedido (reemplaza el id)
+GET {{host}}/api/pedidos/REEMPLAZAR_ID_PEDIDO
+
+### 8. Cocinero: pasar a "en preparación"
+PATCH {{host}}/api/pedidos/REEMPLAZAR_ID_PEDIDO/estado
+Content-Type: application/json
+X-Rol: cocinero
+
+{ "estado": "en_preparacion" }
+
+### 9. Cocinero: pasar a "listo"
+PATCH {{host}}/api/pedidos/REEMPLAZAR_ID_PEDIDO/estado
+Content-Type: application/json
+X-Rol: cocinero
+
+{ "estado": "listo" }
+
+### 10. Mozo: entregar
+PATCH {{host}}/api/pedidos/REEMPLAZAR_ID_PEDIDO/estado
+Content-Type: application/json
+X-Rol: mozo
+
+{ "estado": "entregado" }
+
+### 11. Anular un pedido
+PATCH {{host}}/api/pedidos/REEMPLAZAR_ID_PEDIDO/estado
+Content-Type: application/json
+X-Rol: mozo
+
+{ "estado": "anulado" }
+
+### --- Casos de error (para las capturas de pruebas negativas) ---
+
+### E1. Mesa inválida y pedido sin productos -> 400
+POST {{host}}/api/pedidos
+Content-Type: application/json
+X-Rol: mozo
+
+{ "mesa": 99, "items": [] }
+
+### E2. El cocinero intenta registrar un pedido -> 403
+POST {{host}}/api/pedidos
+Content-Type: application/json
+X-Rol: cocinero
+
+{ "mesa": 1, "items": [ { "productoId": "REEMPLAZAR_ID_PRODUCTO", "cantidad": 1 } ] }
+
+### E3. Saltarse un estado (de recibido a listo) -> 409
+PATCH {{host}}/api/pedidos/REEMPLAZAR_ID_PEDIDO/estado
+Content-Type: application/json
+X-Rol: administrador
+
+{ "estado": "listo" }
+
+### E4. Pedido inexistente -> 404
+GET {{host}}/api/pedidos/000000000000000000000000
