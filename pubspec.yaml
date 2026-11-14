@@ -1,7 +1,7 @@
 name: sabor_pedidos
 description: "Aplicación móvil para pedidos de menú en un restaurante local (Caso 03 - Grupo 1). Proyecto académico CERTUS."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.5.0
@@ -10,6 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  http: ^1.2.2        # consumo de la API REST
+  provider: ^6.1.2    # gestión de estado
 
 dev_dependencies:
   flutter_test:
