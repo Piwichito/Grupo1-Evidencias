@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../core/app_theme.dart';
 import '../core/formato.dart';
-import '../data/menu_demo.dart';
-import '../data/pedido_repository.dart';
+import '../data/api/api_exception.dart';
 import '../models/categoria.dart';
-import '../models/item_pedido.dart';
+import '../models/nuevo_pedido.dart';
+import '../models/producto.dart';
+import '../providers/menu_provider.dart';
+import '../providers/pedidos_provider.dart';
 import '../widgets/filtro_categorias.dart';
+import '../widgets/mensajes.dart';
 import '../widgets/producto_card.dart';
+import '../widgets/vista_carga.dart';
 
-/// Pantalla: formulario para registrar un pedido nuevo.
+/// Pantalla: formulario para registrar un pedido nuevo (se envía a la API).
 class NuevoPedidoScreen extends StatefulWidget {
   const NuevoPedidoScreen({super.key});
 
@@ -29,7 +34,7 @@ class _NuevoPedidoScreenState extends State<NuevoPedidoScreen> {
   Categoria _categoria = Categoria.entradas;
 
   /// Cantidad elegida por producto: { idProducto: cantidad }.
-  final Map<int, int> _cantidades = {};
+  final Map<String, int> _cantidades = {};
 
   @override
   void dispose() {
@@ -39,23 +44,35 @@ class _NuevoPedidoScreenState extends State<NuevoPedidoScreen> {
     super.dispose();
   }
 
-  /// Convierte las cantidades elegidas en ítems del pedido.
-  List<ItemPedido> get _items {
-    return [
-      for (final producto in menuDemo)
-        if ((_cantidades[producto.id] ?? 0) > 0)
-          ItemPedido(producto: producto, cantidad: _cantidades[producto.id]!),
-    ];
+  /// Líneas del pedido: solo los productos con cantidad mayor a cero.
+  List<LineaNuevoPedido> get _lineas => [
+    for (final entrada in _cantidades.entries)
+      if (entrada.value > 0)
+        LineaNuevoPedido(productoId: entrada.key, cantidad: entrada.value),
+  ];
+
+  /// Total mostrado en pantalla (la API vuelve a calcularlo al registrar el pedido).
+  double _total(List<Producto> productos) {
+    double suma = 0;
+    for (final producto in productos) {
+      suma += producto.precio * (_cantidades[producto.id] ?? 0);
+    }
+    return suma;
   }
 
-  double get _total => _items.fold(0.0, (suma, item) => suma + item.subtotal);
-
-  Future<void> _registrar() async {
+  Future<void> _registrar(double total) async {
+    final pedidos = context.read<PedidosProvider>();
+    if (pedidos.enviando) {
+      return; // Evita registrar dos veces con un doble toque.
+    }
     if (!_formKey.currentState!.validate()) return;
 
-    if (_items.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Agrega al menos un producto al pedido')),
+    final lineas = _lineas;
+    if (lineas.isEmpty) {
+      mostrarAviso(
+        context,
+        'Agrega al menos un producto al pedido',
+        esError: true,
       );
       return;
     }
@@ -65,8 +82,8 @@ class _NuevoPedidoScreenState extends State<NuevoPedidoScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Confirmar pedido'),
         content: Text(
-          'Mesa ${_mesaController.text} · ${_items.length} producto(s)\n'
-          'Total: ${formatearSoles(_total)}',
+          'Mesa ${_mesaController.text} · ${lineas.length} producto(s)\n'
+          'Total: ${formatearSoles(total)}',
         ),
         actions: [
           TextButton(
@@ -84,89 +101,106 @@ class _NuevoPedidoScreenState extends State<NuevoPedidoScreen> {
     // Después de un await hay que verificar que la pantalla siga abierta.
     if (confirmar != true || !mounted) return;
 
-    PedidoRepository.instancia.crearPedido(
-      mesa: int.parse(_mesaController.text),
-      items: _items,
-      cliente: _clienteController.text,
-      observaciones: _observacionesController.text,
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Pedido registrado correctamente')),
-    );
-    Navigator.of(context).pop();
+    try {
+      final pedido = await pedidos.crear(
+        NuevoPedido(
+          mesa: int.parse(_mesaController.text),
+          lineas: lineas,
+          cliente: _clienteController.text.trim(),
+          observaciones: _observacionesController.text.trim(),
+        ),
+      );
+      if (!mounted || pedido == null) return;
+      mostrarAviso(
+        context,
+        'Pedido #${pedido.numero} registrado correctamente',
+      );
+      Navigator.of(context).pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      mostrarAviso(context, e.mensajeCompleto, esError: true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final productos =
-        menuDemo.where((p) => p.categoria == _categoria).toList();
+    final menu = context.watch<MenuProvider>();
+    final enviando = context.select<PedidosProvider, bool>((p) => p.enviando);
+    final productos = menu.productosDe(_categoria);
+    final total = _total(menu.productos);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Nuevo pedido')),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.only(bottom: 16),
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  TextFormField(
-                    controller: _mesaController,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      labelText: 'Número de mesa',
-                      prefixIcon: Icon(Icons.table_restaurant),
-                      border: OutlineInputBorder(),
+      body: VistaCarga(
+        cargado: menu.cargado,
+        error: menu.error,
+        onReintentar: menu.cargar,
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 16),
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _mesaController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: const InputDecoration(
+                        labelText: 'Número de mesa',
+                        prefixIcon: Icon(Icons.table_restaurant),
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (valor) {
+                        final mesa = int.tryParse(valor ?? '');
+                        if (mesa == null || mesa < 1 || mesa > _maxMesas) {
+                          return 'Ingresa una mesa entre 1 y $_maxMesas';
+                        }
+                        return null;
+                      },
                     ),
-                    validator: (valor) {
-                      final mesa = int.tryParse(valor ?? '');
-                      if (mesa == null || mesa < 1 || mesa > _maxMesas) {
-                        return 'Ingresa una mesa entre 1 y $_maxMesas';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _clienteController,
-                    textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(
-                      labelText: 'Cliente (opcional)',
-                      prefixIcon: Icon(Icons.person_outline),
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _clienteController,
+                      textCapitalization: TextCapitalization.words,
+                      maxLength: 60,
+                      decoration: const InputDecoration(
+                        labelText: 'Cliente (opcional)',
+                        prefixIcon: Icon(Icons.person_outline),
+                        border: OutlineInputBorder(),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-            FiltroCategorias(
-              seleccionada: _categoria,
-              onSeleccionar: (c) => setState(() => _categoria = c),
-            ),
-            for (final producto in productos)
-              ProductoCard(
-                producto: producto,
-                cantidad: _cantidades[producto.id] ?? 0,
-                onCambiarCantidad: (nueva) =>
-                    setState(() => _cantidades[producto.id] = nueva),
-              ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: TextFormField(
-                controller: _observacionesController,
-                maxLines: 2,
-                decoration: const InputDecoration(
-                  labelText: 'Observaciones (opcional)',
-                  hintText: 'Ej.: sin ají, sin cebolla...',
-                  border: OutlineInputBorder(),
+                  ],
                 ),
               ),
-            ),
-          ],
+              FiltroCategorias(
+                seleccionada: _categoria,
+                onSeleccionar: (c) => setState(() => _categoria = c),
+              ),
+              for (final producto in productos)
+                ProductoCard(
+                  producto: producto,
+                  cantidad: _cantidades[producto.id] ?? 0,
+                  onCambiarCantidad: (nueva) =>
+                      setState(() => _cantidades[producto.id] = nueva),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: TextFormField(
+                  controller: _observacionesController,
+                  maxLines: 2,
+                  maxLength: 200,
+                  decoration: const InputDecoration(
+                    labelText: 'Observaciones (opcional)',
+                    hintText: 'Ej.: sin ají, sin cebolla...',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
       bottomNavigationBar: SafeArea(
@@ -181,7 +215,7 @@ class _NuevoPedidoScreenState extends State<NuevoPedidoScreen> {
                   children: [
                     const Text('Total'),
                     Text(
-                      formatearSoles(_total),
+                      formatearSoles(total),
                       style: const TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
@@ -193,8 +227,11 @@ class _NuevoPedidoScreenState extends State<NuevoPedidoScreen> {
               ),
               Expanded(
                 child: ElevatedButton(
-                  onPressed: _registrar,
-                  child: const Text('Registrar pedido'),
+                  // Se deshabilita mientras la carta no cargó o hay un envío en curso.
+                  onPressed: (menu.cargado && !enviando)
+                      ? () => _registrar(total)
+                      : null,
+                  child: Text(enviando ? 'Enviando...' : 'Registrar pedido'),
                 ),
               ),
             ],
